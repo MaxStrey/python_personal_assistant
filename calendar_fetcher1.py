@@ -1,6 +1,8 @@
 import datetime
 import os
 import pickle
+import pytz
+from dateutil import parser  # Add this import
 
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -61,9 +63,11 @@ def schedule_task(service, summary, description, start_time, end_time):
     service.events().insert(calendarId='primary', body=event).execute()
     print(f"Scheduled task: {summary} from {start_time} to {end_time}")
 
-def find_free_time_slots(events, duration_minutes, day_start, day_end):
+def find_free_time_slots(events, duration_minutes, local_tz):
     free_slots = []
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(local_tz)
+    day_start = '09:00'
+    day_end = '17:00'
     current_time = now.replace(hour=int(day_start.split(':')[0]), minute=int(day_start.split(':')[1]), second=0, microsecond=0)
     if current_time < now:
         current_time += datetime.timedelta(days=1)
@@ -73,19 +77,19 @@ def find_free_time_slots(events, duration_minutes, day_start, day_end):
         event_start_str = event['start'].get('dateTime', event['start'].get('date'))
         event_end_str = event['end'].get('dateTime', event['end'].get('date'))
 
-        event_start = datetime.datetime.fromisoformat(event_start_str[:-1]) if 'T' in event_start_str else datetime.datetime.fromisoformat(event_start_str)
-        event_end = datetime.datetime.fromisoformat(event_end_str[:-1]) if 'T' in event_end_str else datetime.datetime.fromisoformat(event_end_str)
+        event_start = parser.isoparse(event_start_str)
+        event_end = parser.isoparse(event_end_str)
 
         print(f"Checking event: Start {event_start}, End {event_end}")
 
         if current_time + datetime.timedelta(minutes=duration_minutes) <= event_start:
-            free_slots.append((current_time.isoformat() + 'Z', (current_time + datetime.timedelta(minutes=duration_minutes)).isoformat() + 'Z'))
+            free_slots.append((current_time.astimezone(pytz.utc).isoformat(), (current_time + datetime.timedelta(minutes=duration_minutes)).astimezone(pytz.utc).isoformat()))
             current_time = event_end
         elif current_time < event_end:
             current_time = event_end
 
     while current_time + datetime.timedelta(minutes=duration_minutes) <= end_of_day:
-        free_slots.append((current_time.isoformat() + 'Z', (current_time + datetime.timedelta(minutes=duration_minutes)).isoformat() + 'Z'))
+        free_slots.append((current_time.astimezone(pytz.utc).isoformat(), (current_time + datetime.timedelta(minutes=duration_minutes)).astimezone(pytz.utc).isoformat()))
         current_time += datetime.timedelta(minutes=duration_minutes)
 
     print(f"Found {len(free_slots)} free time slots for {duration_minutes}-minute tasks.")
@@ -102,9 +106,11 @@ def main():
     print("Starting the calendar fetcher script...")
     service = get_google_calendar_service()
 
-    # Prompt the user for day start and end times
-    day_start = input("Enter the start time for your day (in HH:MM format, 24-hour clock): ")
-    day_end = input("Enter the end time for your day (in HH:MM format, 24-hour clock): ")
+    # Hardcoded day start and end times
+    day_start = '09:00'
+    day_end = '17:00'
+    time_zone = 'America/New_York'
+    local_tz = pytz.timezone(time_zone)
     
     now = datetime.datetime.utcnow().isoformat() + 'Z'
     end_of_week = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).isoformat() + 'Z'
@@ -121,7 +127,7 @@ def main():
 
     for task in tasks:
         print(f"Scheduling task: {task['summary']}")
-        free_slots = find_free_time_slots(events, task["duration"], day_start, day_end)
+        free_slots = find_free_time_slots(events, task["duration"], local_tz)
         if free_slots:
             start_time, end_time = free_slots[0]
             if not check_existing_tasks(service, task["summary"], start_time, end_time):
